@@ -1,8 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from model import VulnerabilityDetector
 
 app = FastAPI(title="Vulnerability Detection API")
+
+# Initialize the vulnerability detector
+detector = VulnerabilityDetector()
 
 class DetectionRequest(BaseModel):
     code: str
@@ -14,30 +18,53 @@ class DetectionResponse(BaseModel):
 
 @app.post("/detect", response_model=DetectionResponse)
 async def detect_vulnerability(request: DetectionRequest):
-    # Placeholder logic for vulnerability detection
-    # In real implementation, integrate Hugging Face model here
-    code = request.code
-    # Dummy logic: if "eval" in code, mark as vulnerable
-    if "eval" in code:
-        return DetectionResponse(vulnerable=True, confidence=0.95, details="Use of eval detected")
-    else:
-        return DetectionResponse(vulnerable=False, confidence=0.99)
+    try:
+        result = detector.detect(request.code)
+        return DetectionResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/confirm", response_model=DetectionResponse)
 async def confirm_vulnerability(request: DetectionRequest):
-    # Placeholder for confirmation logic
-    # For now, just return the same as detect
-    return await detect_vulnerability(request)
+    # Run a more thorough analysis by running detection multiple times
+    try:
+        # Run detection twice to confirm
+        result1 = detector.detect(request.code)
+        result2 = detector.detect(request.code)
+        
+        # If both detections agree, return the result with higher confidence
+        if result1['vulnerable'] == result2['vulnerable']:
+            return DetectionResponse(**result1 if result1['confidence'] > result2['confidence'] else result2)
+        else:
+            # If detections disagree, return the one with higher confidence but mark it in details
+            result = result1 if result1['confidence'] > result2['confidence'] else result2
+            result['details'] = f"{result.get('details', '')} (Note: Detection results were inconsistent)"
+            return DetectionResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/poc")
 async def generate_poc(request: DetectionRequest):
-    # Placeholder for PoC generation
-    code = request.code
-    if "eval" in code:
-        poc = "Example PoC: Inject payload to eval function"
-        return {"poc": poc}
-    else:
-        return {"poc": "No PoC available"}
+    try:
+        # First detect the vulnerability
+        detection_result = detector.detect(request.code)
+        
+        if detection_result['vulnerable']:
+            # Generate PoC if vulnerability is detected
+            poc = detector.generate_poc(request.code)
+            return {
+                "vulnerable": True,
+                "poc": poc,
+                "details": detection_result.get('details')
+            }
+        else:
+            return {
+                "vulnerable": False,
+                "poc": None,
+                "details": "No vulnerability detected"
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
